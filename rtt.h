@@ -31,7 +31,7 @@ void usleep(unsigned int usec);
 static void _signal_handler_sigusr1(int sig) {
 }
 
-struct PlatformThread {
+struct RttThread {
 
 	enum Priorities {
 		Low, Normal, High, RealTime,
@@ -85,9 +85,9 @@ struct PlatformThread {
 
 
 #ifdef WIN32
-	inline PlatformThread(DWORD(__stdcall *func)(void *), void *arg=NULL, bool rtThread=false)
+	inline RttThread(DWORD(__stdcall *func)(void *), void *arg=NULL, bool rtThread=false)
 #else
-	inline PlatformThread(void *(*func)(void *), void *arg=NULL, bool rtThread=false)
+	inline RttThread(void *(*func)(void *), void *arg=NULL, bool rtThread=false)
 #endif
 	{
 		Init();
@@ -141,13 +141,13 @@ struct PlatformThread {
 
 	static THREAD_FUNC _boundFuncMain(void *arg)
 	{
-		auto pt = (PlatformThread*)arg;
+		auto pt = (RttThread*)arg;
 		pt->func(pt->arg);
 		return 0;
 	}
 
 
-	inline PlatformThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), joined(false)
+	inline RttThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), joined(false)
 	{
 		Init();
 		
@@ -155,11 +155,11 @@ struct PlatformThread {
 		killOnDelete = true;
 
 #ifdef WIN32
-		handle = CreateThread(NULL, 0, &PlatformThread::_boundFuncMain, this, 0, &id);
+		handle = CreateThread(NULL, 0, &RttThread::_boundFuncMain, this, 0, &id);
 		assert(NULL != handle);
 #else
 		int rc;
-		rc = pthread_create(&handle, NULL, &PlatformThread::_boundFuncMain, this);
+		rc = pthread_create(&handle, NULL, &RttThread::_boundFuncMain, this);
 		assert(0 == rc);
 #endif
 		if (rtThread)
@@ -167,7 +167,7 @@ struct PlatformThread {
 	}
 
 #ifndef WIN32
-private: inline PlatformThread(pthread_t handle) : handle(handle), arg(0), joined(false)
+private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(false)
 	{
 		name[0] = '\0';
 		killOnDelete = false;
@@ -175,7 +175,7 @@ private: inline PlatformThread(pthread_t handle) : handle(handle), arg(0), joine
 	}
 public:
 #else
-private: inline PlatformThread(HANDLE handle) : handle(handle), arg(0), joined(false)
+private: inline RttThread(HANDLE handle) : handle(handle), arg(0), joined(false)
 {
 	name[0] = '\0';
 	killOnDelete = false;
@@ -186,7 +186,7 @@ public:
 
 
 
-	inline ~PlatformThread()
+	inline ~RttThread()
 	{
 		if (!killOnDelete) return;
 
@@ -196,12 +196,12 @@ public:
 		}
 	}
 
-	inline static PlatformThread GetCurrent() 
+	inline static RttThread GetCurrent() 
 	{
 #ifndef WIN32
-		return PlatformThread(pthread_self());
+		return RttThread(pthread_self());
 #else
-		return PlatformThread(GetCurrentThread());
+		return RttThread(GetCurrentThread());
 #endif
 	}
 
@@ -294,7 +294,7 @@ public:
 };
 
 
-struct PlatformThreadEvent {
+struct RttThreadEvent {
 private:
 #ifndef WIN32
 	pthread_mutex_t mtx;
@@ -306,7 +306,7 @@ private:
 	bool autoreset;
 
 public:
-	PlatformThreadEvent(bool autoreset=true) : autoreset(autoreset), state(0)
+	RttThreadEvent(bool autoreset=true) : autoreset(autoreset), state(0)
 	{		
 #ifndef WIN32
 		pthread_mutex_init(&mtx, 0);
@@ -316,7 +316,7 @@ public:
 #endif
 	}
 
-	~PlatformThreadEvent()
+	~RttThreadEvent()
 	{
 #ifndef WIN32
 		pthread_cond_destroy(&cond);
