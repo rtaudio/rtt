@@ -1,8 +1,8 @@
-#include "platform.h"
+#include "rtt.h"
 
 
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <windows.h>
 
 void usleep(unsigned int usec)
@@ -23,5 +23,6 @@ void usleep(unsigned int usec)
     WaitForSingleObject(timer, INFINITE); 
     CloseHandle(timer); 
 }
+
 
 #endif

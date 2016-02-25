@@ -8,12 +8,12 @@
 #include <signal.h>
 #include <functional>
 
-#ifdef WIN32
+#ifdef _WIN32
 #include<windows.h>
 void usleep(unsigned int usec);
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <windows.h>
 #else
 #include <pthread.h>
@@ -21,7 +21,7 @@ void usleep(unsigned int usec);
 #endif
 
 
-#ifdef WIN32
+#ifdef _WIN32
 #define THREAD_FUNC DWORD WINAPI
 #else
 #define THREAD_FUNC void *
@@ -37,7 +37,7 @@ struct RttThread {
 		Low, Normal, High, RealTime,
 	};
 
-#ifdef WIN32
+#ifdef _WIN32
 	HANDLE handle;
 	DWORD id;
 #else
@@ -63,7 +63,7 @@ struct RttThread {
 			return;
 		}
 		init = true;
-	#ifndef WIN32
+	#ifndef _WIN32
 		assert(-1 != setpriority(PRIO_PROCESS, 0, -20)); // nice value of -20 is highest!
 
 		signal(SIGUSR1,_signal_handler_sigusr1); 
@@ -84,7 +84,7 @@ struct RttThread {
 	}
 
 
-#ifdef WIN32
+#ifdef _WIN32
 	inline RttThread(DWORD(__stdcall *func)(void *), void *arg=NULL, bool rtThread=false)
 #else
 	inline RttThread(void *(*func)(void *), void *arg=NULL, bool rtThread=false)
@@ -95,7 +95,7 @@ struct RttThread {
 		killOnDelete = true;
 		name[0] = '\0';
 		joined = false;
-#ifdef WIN32
+#ifdef _WIN32
 		handle = CreateThread (NULL, 0, func, arg, 0, &id);
 		assert(NULL != handle);	
 #else
@@ -109,7 +109,7 @@ struct RttThread {
 
 	void SetPriority(Priorities prio)
 	{
-#ifdef WIN32
+#ifdef _WIN32
 		int winprio;
 
 		switch (prio) {
@@ -123,7 +123,7 @@ struct RttThread {
 		int prio_max = sched_get_priority_max(SCHED_RR); // SCHED_FIFO
 		int prio_min = sched_get_priority_min(SCHED_RR); // SCHED_FIFO
 
-		printf("sched_get_priority_(min/max) = %d/%d\n", prio_min, prio_max);
+		printf("sched_get_priority_(min..max) = %d..%d\n", prio_min, prio_max);
 
 		switch (prio) {
 		case Low:		param.sched_priority = prio_min; break;
@@ -150,11 +150,11 @@ struct RttThread {
 	inline RttThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), joined(false)
 	{
 		Init();
-		
+
 		name[0] = '\0';
 		killOnDelete = true;
 
-#ifdef WIN32
+#ifdef _WIN32
 		handle = CreateThread(NULL, 0, &RttThread::_boundFuncMain, this, 0, &id);
 		assert(NULL != handle);
 #else
@@ -166,7 +166,30 @@ struct RttThread {
 			SetPriority(RealTime);
 	}
 
-#ifndef WIN32
+	inline RttThread(std::function<void(void)> &method, bool rtThread = false) : arg(NULL), joined(false)
+	{
+		Init();
+
+		func = [method](void *arg) {
+			method();
+		};
+
+		name[0] = '\0';
+		killOnDelete = false;
+
+#ifdef _WIN32
+		handle = CreateThread(NULL, 0, &RttThread::_boundFuncMain, this, 0, &id);
+		assert(NULL != handle);
+#else
+		int rc;
+		rc = pthread_create(&handle, NULL, &RttThread::_boundFuncMain, this);
+		assert(0 == rc);
+#endif
+		if (rtThread)
+			SetPriority(RealTime);
+	}
+
+#ifndef _WIN32
 private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(false)
 	{
 		name[0] = '\0';
@@ -188,7 +211,10 @@ public:
 
 	inline ~RttThread()
 	{
-		if (!killOnDelete) return;
+		if (!killOnDelete) {
+			Join();
+			return;
+		}
 
 		bool ok = joined || Join(500) || Kill() || Join(500);
 		if(!ok) {
@@ -198,14 +224,14 @@ public:
 
 	inline static RttThread GetCurrent() 
 	{
-#ifndef WIN32
+#ifndef _WIN32
 		return RttThread(pthread_self());
 #else
 		return RttThread(GetCurrentThread());
 #endif
 	}
 
-#ifdef WIN32
+#ifdef _WIN32
 #pragma pack(push,8)
 	typedef struct tagTHREADNAME_INFO
 	{
@@ -220,7 +246,7 @@ public:
 	inline bool SetName(const char *name)
 	{
 		strcpy(this->name, name);
-#ifdef WIN32
+#ifdef _WIN32
 		assert(GetCurrentThread() == handle);
 				
 		THREADNAME_INFO info;
@@ -250,7 +276,7 @@ public:
 	{
 		if(joined)
 			return true;
-#ifdef WIN32
+#ifdef _WIN32
 		WaitForSingleObject(handle, maxMs > 0 ? maxMs : INFINITE);
 		return true;
 #else
@@ -277,7 +303,7 @@ public:
 
 	inline bool Kill()
 	{
-#ifdef WIN32
+#ifdef _WIN32
 		return false;
 #else
 		return pthread_kill(handle, SIGUSR1) == 0;
@@ -287,7 +313,7 @@ public:
 	
 	inline static void Exit()
 	{
-	#ifndef WIN32
+	#ifndef _WIN32
 		pthread_exit(NULL);
 	#endif					
 	}
@@ -296,7 +322,7 @@ public:
 
 struct RttThreadEvent {
 private:
-#ifndef WIN32
+#ifndef _WIN32
 	pthread_mutex_t mtx;
 	pthread_cond_t cond;
 #else
@@ -308,7 +334,7 @@ private:
 public:
 	RttThreadEvent(bool autoreset=true) : autoreset(autoreset), state(0)
 	{		
-#ifndef WIN32
+#ifndef _WIN32
 		pthread_mutex_init(&mtx, 0);
 		pthread_cond_init(&cond, 0);
 #else
@@ -318,7 +344,7 @@ public:
 
 	~RttThreadEvent()
 	{
-#ifndef WIN32
+#ifndef _WIN32
 		pthread_cond_destroy(&cond);
 		pthread_mutex_destroy(&mtx);
 #else
@@ -327,7 +353,7 @@ public:
 	}
 
 	void Signal() {
-#ifndef WIN32
+#ifndef _WIN32
 		pthread_mutex_lock(&mtx);
 		state = 1;
 		if (autoreset)
@@ -341,7 +367,7 @@ public:
 	}
 
 	bool Wait(int msecs=0) {
-#ifndef WIN32
+#ifndef _WIN32
 		bool ret = true;
 
 		pthread_mutex_lock(&mtx);
@@ -380,7 +406,7 @@ public:
 	}
 
 	bool Reset() {
-#ifndef WIN32
+#ifndef _WIN32
 		pthread_mutex_lock(&mtx);
 		state = 0;
 		pthread_mutex_unlock(&mtx);
@@ -392,13 +418,13 @@ public:
 };
 
 
-#ifdef WIN32
+#ifdef _WIN32
 #define EXIT_SIGNAL_HANDLER(h) signal(SIGINT, h); signal(SIGABRT, h); signal(SIGTERM, h);
 #else
 #define EXIT_SIGNAL_HANDLER(h) signal(SIGQUIT, h); signal(SIGTERM, h); signal(SIGHUP, h); signal(SIGINT, h);
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
 #define in_port_t u_short
 #define inet_aton(s,b) InetPton(AF_INET,L##s,b)
 #define close closesocket
@@ -409,7 +435,7 @@ public:
 
 
 
-#ifdef WIN32
+#ifdef _WIN32
 #define MUTEX CRITICAL_SECTION
 #define MUTEX_INIT(m) InitializeCriticalSection(&(m));
 #define MUTEX_LOCK(m) EnterCriticalSection(&(m));
