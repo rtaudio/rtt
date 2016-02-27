@@ -31,11 +31,14 @@ void usleep(unsigned int usec);
 static void _signal_handler_sigusr1(int sig) {
 }
 
-struct RttThread {
-
+class RttThread {
+public:
+	typedef std::function<void(void *arg)> Routine;
 	enum Priorities {
 		Low, Normal, High, RealTime,
 	};
+
+private:
 
 #ifdef _WIN32
 	HANDLE handle;
@@ -48,7 +51,7 @@ struct RttThread {
 	int joined;
 	char name[32];
 
-	typedef std::function<void(void *arg)> Routine;
+	
 
 	Routine func;
 	void *arg;
@@ -56,6 +59,7 @@ struct RttThread {
 	bool killOnDelete;
 	
 	
+public:
 	static void Init()
 	{
 		static bool init = false;
