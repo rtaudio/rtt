@@ -67,8 +67,12 @@ public:
 			return;
 		}
 		init = true;
-	#ifndef _WIN32
-		assert(-1 != setpriority(PRIO_PROCESS, 0, -20)); // nice value of -20 is highest!
+    #ifndef _WIN32
+        // nice value of -20 is highest!
+        int r;
+        if(0 != (r=setpriority(PRIO_PROCESS, 0, -20))) {
+            fprintf(stderr, "rtt: Could not set process nice value (error %d)!\n", -1);
+        }
 
 		signal(SIGUSR1,_signal_handler_sigusr1); 
 	/* // TODO
@@ -156,7 +160,7 @@ public:
 		Init();
 
 		name[0] = '\0';
-		killOnDelete = true;
+		killOnDelete = false;
 
 #ifdef _WIN32
 		handle = CreateThread(NULL, 0, &RttThread::_boundFuncMain, this, 0, &id);
