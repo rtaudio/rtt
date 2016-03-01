@@ -219,6 +219,9 @@ public:
 
 	inline ~RttThread()
 	{
+		if (joined)
+			return;
+
 		if (!killOnDelete) {
 			Join();
 			return;
@@ -290,20 +293,35 @@ public:
 #else
 		void *res;
 		int s;
+
+
 		
 		if(maxMs > 0) {
 			timespec to;
-			to.tv_nsec = maxMs * (1000L * 1000L);
+			if (clock_gettime(CLOCK_REALTIME, &to) == -1) {
+				fprintf(stderr, "Joining thread [%s] failed at clock_gettime()!\n", this->name);
+				return false;
+			}
+			long s = maxMs / 1000L;
+			to.tv_sec += s;
+			to.tv_nsec += (long)(maxMs - s * 1000L) * (1000L * 1000L);
+			//fprintf(stderr, "to.tv_sec = %d, to.tv_nsec = %d\n", (int)to.tv_sec,  (int)to.tv_nsec);
 			s = pthread_timedjoin_np(handle, &res, &to);
 		} else {
 			s = pthread_join(handle, &res);
 		}
-        if (s != 0) {
-			fprintf(stderr, "Joining thread [%s] failed!\n", this->name);
+
+		if (s == ETIMEDOUT) {
+			fprintf(stderr, "Joining thread [%s] timed out!\n", this->name);
 			return false;
 		}
 
-		free(res);
+        if (s != 0) {
+			fprintf(stderr, "Joining thread [%s] failed (%d)!\n", this->name, s);
+			return false;
+		}
+
+		//free(res);
 		joined = true;
 		return true;
 #endif
@@ -314,7 +332,7 @@ public:
 #ifdef _WIN32
 		return false;
 #else
-		return pthread_kill(handle, SIGUSR1) == 0;
+		return pthread_kill(handle, SIGTERM) == 0;
 #endif
 	}
 
