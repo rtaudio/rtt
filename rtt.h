@@ -8,25 +8,107 @@
 #include <signal.h>
 #include <functional>
 
+
 #ifdef _WIN32
 #include<windows.h>
+#include<Avrt.h>
+#pragma comment(lib, "Avrt.lib") 
 void usleep(unsigned int usec);
 #endif
+
+void nsleep(int64_t nsec);
 
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <unistd.h>
 #include <pthread.h>
 #include <sys/resource.h>
+#include <errno.h>
+
+#define USE_SCHEDULER SCHED_FIFO // SCHED_RR
 #endif
 
+#include <iostream>
 
 #ifdef _WIN32
 #define THREAD_FUNC DWORD WINAPI
+int fork(void);
 #else
 #define THREAD_FUNC void *
 #endif
 
+#ifdef ANDROID
+#include <sstream>
+#include <android/log.h>
+#define SSTR( x ) static_cast< std::ostringstream & >( \
+        ( std::ostringstream() << std::dec << x ) ).str()
+
+	/*
+void androidLogWrapper(FILE *f, const char *fmt, ...)
+{
+	int al = ANDROID_LOG_INFO;
+	if (f == stderr)
+	{
+		al = ANDROID_LOG_ERROR;
+		
+	}
+	
+	va_list args;
+	va_start(args, format);
+
+	if (priority & PRIO_LOG)
+		vprintf(format, args);
+
+	va_end(args);
+	
+	
+	
+}
+*/
+#define fprintf(f,fmt, ...) __android_log_print((f == stderr) ? ANDROID_LOG_ERROR : ANDROID_LOG_INFO, "rtt", fmt, ##__VA_ARGS__);
+#else
+#define SSTR( X ) std::to_string( X )
+#endif
+
+class RttThreadPrototype {
+public:
+	template<typename Functor>
+	RttThreadPrototype(const Functor &lambda, bool rtThread = false, std::string threadNamePrefix = "")
+		: func(lambda), rt(rtThread), namePrefix(threadNamePrefix)
+	{
+		nameIndex = 0;
+	}
+
+	std::string nextName() const {
+		//return namePrefix + std::to_string(nextNameIndex());
+		return namePrefix + SSTR(nextNameIndex());
+	}
+
+	int nextNameIndex() const {
+		return nameIndex++;
+	}
+
+	std::function<void()> const& getFunc() const {
+		return func;
+	}
+
+	bool isRt() const {	return rt;}
+
+	RttThreadPrototype(const RttThreadPrototype& other) :
+		func(other.func), namePrefix(other.namePrefix), rt(other.rt)
+	{
+		nameIndex = other.nextNameIndex();
+	}
+
+private:
+	std::function<void(void)> func;
+	bool rt;
+	std::string namePrefix;
+	mutable int nameIndex;
+
+
+};
 
 static void _signal_handler_sigusr1(int sig) {
 }
@@ -60,6 +142,17 @@ private:
 	
 	
 public:
+
+	static int GetSystemNumCores() {
+#ifdef WIN32
+		SYSTEM_INFO sysinfo;
+		GetSystemInfo(&sysinfo);
+		return  sysinfo.dwNumberOfProcessors;
+#else
+		return sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+	}
+
 	static void Init()
 	{
 		static bool init = false;
@@ -81,6 +174,7 @@ public:
 	system(cmd);
 	*/
 	#else
+
 		if(!SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS)) {
 		  DWORD dwError = GetLastError();
 		  fprintf(stderr, "Could not set RealTime Priority (%d)\n", dwError);
@@ -127,11 +221,16 @@ public:
 		case RealTime: winprio = THREAD_PRIORITY_TIME_CRITICAL; break;
 		}
 		assert(SetThreadPriority(handle, winprio) != 0);
-#else
-		int prio_max = sched_get_priority_max(SCHED_RR); // SCHED_FIFO
-		int prio_min = sched_get_priority_min(SCHED_RR); // SCHED_FIFO
 
-		printf("sched_get_priority_(min..max) = %d..%d\n", prio_min, prio_max);
+
+
+#else
+		static int prio_max = -1, prio_min = -1;
+		if (prio_max == -1 || prio_min == -1) {
+			prio_max = sched_get_priority_max(USE_SCHEDULER); // SCHED_FIFO
+			prio_min = sched_get_priority_min(USE_SCHEDULER); // SCHED_FIFO
+			printf("sched_get_priority_{min|max}(%s) = %d|%d\n", USE_SCHEDULER == SCHED_FIFO ? "SCHED_FIFO" : "SCHED_RR", prio_min, prio_max);
+		}
 
 		switch (prio) {
 		case Low:		param.sched_priority = prio_min; break;
@@ -140,9 +239,21 @@ public:
 		case RealTime:	param.sched_priority = prio_max; break;
 		}
 
-		int rc = pthread_setschedparam(handle, SCHED_RR, &param);
+		int rc = pthread_setschedparam(handle, USE_SCHEDULER, &param);
 		if (rc != 0) {
-			fprintf(stderr, "pthread_setschedparam failed! (PRIO=%d; RC=%d)\n", prio_max, rc);
+			static int triedFix = 0;
+			if (!triedFix) {
+				// fix: disable RT group scheduling http://lists.opensuse.org/opensuse-security/2011-04/msg00015.html
+                //system("sysctl - w kernel.sched_rt_runtime_us = -1 &> /dev/null");
+                pclose(popen("sysctl -w kernel.sched_rt_runtime_us=-1", "r"));
+				triedFix = 1;
+				rc = pthread_setschedparam(handle, USE_SCHEDULER, &param);
+			} 
+			
+			if (rc != 0) {
+				errno = rc; perror("pthread_setschedparam");
+				fprintf(stderr, "pthread_setschedparam failed! The thread will not perform with real-time accuracy! (PRIO=%d; RC=%d, %s)\n", prio_max, rc, USE_SCHEDULER == SCHED_FIFO ? "SCHED_FIFO" : "SCHED_RR");
+			}
 		}
 #endif
 	}
@@ -150,15 +261,58 @@ public:
 	static THREAD_FUNC _boundFuncMain(void *arg)
 	{
 		auto pt = (RttThread*)arg;
+
+		if (pt->isRt) {
+#ifndef _WIN32 
+			/*
+			int c = sched_getcpu();
+			if (c < 0) {
+				fprintf(stderr, "sched_getcpu failed!\n");
+			}
+			else {
+				cpu_set_t cpuset; CPU_ZERO(&cpuset);	CPU_SET(c, &cpuset);
+				int s = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+				if (s != 0)
+					fprintf(stderr, "failed sticking RT thread to CPU %d!\n", c);
+				else
+					fprintf(stderr, "sticked RT thread to CPU %d\n", c);
+			} */
+#else
+				DWORD nTaskIndex = 0;
+				HANDLE hTask = AvSetMmThreadCharacteristicsW(L"Pro Audio", &nTaskIndex);
+				if (NULL == hTask) {
+					auto le = GetLastError(); // ERROR_THREAD_ALREADY_IN_TASK
+					if (le == ERROR_INVALID_TASK_INDEX) {
+						std::cerr << "ERROR_INVALID_TASK_INDEX" << std::endl;
+					}
+					else if (le == ERROR_INVALID_TASK_NAME) {
+						std::cerr << "ERROR_INVALID_TASK_NAME" << std::endl;
+					}
+					else if (le == ERROR_PRIVILEGE_NOT_HELD) {
+						std::cerr << "ERROR_PRIVILEGE_NOT_HELD" << std::endl;
+					}
+				}
+				hTask = hTask;
+				assert(AvSetMmThreadPriority(hTask, AVRT_PRIORITY_CRITICAL) == TRUE);
+
+			//fprintf(stderr, "windows: no cpu-sticking implemeted!\n");
+#endif
+		}
+
+		//pt->handle = GetCurrentThread();
+		if (strlen(pt->name) > 0)
+			pt->SetName(pt->name);
+
 		pt->func(pt->arg);
 		return 0;
 	}
 
+	bool isRt;
 
-	inline RttThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), joined(false)
+	inline RttThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), isRt(rtThread), joined(false)
 	{
 		Init();
-
+		proto = 0;
 		name[0] = '\0';
 		killOnDelete = false;
 
@@ -174,9 +328,10 @@ public:
 			SetPriority(RealTime);
 	}
 
-	inline RttThread(std::function<void(void)> &method, bool rtThread = false) : arg(NULL), joined(false)
+	inline RttThread(std::function<void(void)> &method, bool rtThread = false) : arg(NULL), isRt(rtThread), joined(false)
 	{
 		Init();
+		proto = 0;
 
 		func = [method](void *arg) {
 			method();
@@ -197,12 +352,87 @@ public:
 			SetPriority(RealTime);
 	}
 
+	template<typename Functor>
+	RttThread(const Functor &lambda, bool rtThread = false, std::string threadName="") : arg(NULL), isRt(rtThread), joined(false)
+	{
+		Init();
+		proto = 0;
+
+		std::function<void(void)> f(lambda);
+
+		func = [f](void *arg) {
+			f();
+		};
+
+		memset(name, 0, sizeof(name));
+		threadName.copy(name, sizeof(name));
+		killOnDelete = false;
+
+#ifdef _WIN32
+		handle = CreateThread(NULL, 0, &RttThread::_boundFuncMain, this, 0, &id);
+		assert(NULL != handle);
+#else
+		int rc;
+		rc = pthread_create(&handle, NULL, &RttThread::_boundFuncMain, this);
+		assert(0 == rc);
+#endif
+		if (rtThread)
+			SetPriority(RealTime);
+	}
+
+	const RttThreadPrototype *proto;
+
+	RttThread(const RttThread& other) {
+		Init();
+
+		isRt = other.proto->isRt();
+		arg = 0;
+		joined = false;
+
+		if (other.proto) {
+			auto &proto(*other.proto);
+			memset(name, 0, sizeof(name));
+			proto.nextName().copy(name, sizeof(name));
+			killOnDelete = false;
+
+			auto &f = proto.getFunc();
+
+			func = [f](void *arg) {
+				f();
+			};
+
+#ifdef _WIN32
+			handle = CreateThread(NULL, 0, &RttThread::_boundFuncMain, this, 0, &id);
+			assert(NULL != handle);
+#else
+			int rc;
+			rc = pthread_create(&handle, NULL, &RttThread::_boundFuncMain, this);
+			assert(0 == rc);
+#endif
+			if (proto.isRt())
+				SetPriority(RealTime);
+			//else
+//				SetPriority(Low);
+		}
+	}
+
+	RttThread(const RttThreadPrototype& proto) {
+		Init();
+
+		this->proto = &proto;
+
+        handle = 0;
+	}
+
+
 #ifndef _WIN32
 private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(false)
 	{
 		name[0] = '\0';
 		killOnDelete = false;
+#ifndef ANDROID
 		pthread_getname_np(pthread_self(), name, sizeof(name));
+#endif
 	}
 public:
 #else
@@ -219,7 +449,7 @@ public:
 
 	inline ~RttThread()
 	{
-		if (joined)
+        if (joined || !handle)
 			return;
 
 		if (!killOnDelete) {
@@ -258,7 +488,7 @@ public:
 	{
 		strcpy(this->name, name);
 #ifdef _WIN32
-		assert(GetCurrentThread() == handle);
+		//assert(GetCurrentThread() == handle);
 				
 		THREADNAME_INFO info;
 		info.dwType = 0x1000;
@@ -283,6 +513,19 @@ public:
 
 	}
 
+	static bool YieldCurrent() {
+#ifdef ANDROID
+		nsleep(1); // todo
+		return true;
+#elif !defined(_WIN32)
+		return pthread_yield() == 0;
+#else
+		// on windows this_thread::yield is not performing well!
+		usleep(1);
+		return true;
+#endif
+	}
+
 	bool Join(long maxMs=0)
 	{
 		if(joined)
@@ -294,8 +537,12 @@ public:
 		void *res;
 		int s;
 
-
-		
+#ifdef ANDROID
+		if (maxMs > 0) {
+			fprintf(stderr, "Rtt: no timed join on android yet!\n");
+			maxMs = 0;
+		}
+#else		
 		if(maxMs > 0) {
 			timespec to;
 			if (clock_gettime(CLOCK_REALTIME, &to) == -1) {
@@ -307,7 +554,9 @@ public:
 			to.tv_nsec += (long)(maxMs - s * 1000L) * (1000L * 1000L);
 			//fprintf(stderr, "to.tv_sec = %d, to.tv_nsec = %d\n", (int)to.tv_sec,  (int)to.tv_nsec);
 			s = pthread_timedjoin_np(handle, &res, &to);
-		} else {
+		} else
+#endif		
+		{
 			s = pthread_join(handle, &res);
 		}
 
@@ -330,9 +579,11 @@ public:
 	inline bool Kill()
 	{
 #ifdef _WIN32
-		return false;
-#else
-		return pthread_kill(handle, SIGTERM) == 0;
+		return TerminateThread(handle, 0) != 0;
+#elif defined(ANDROID)
+		return pthread_kill(handle, 0) == 0 && (joined = true); // SIGTERM TODO!
+#else		
+		return pthread_cancel(handle) == 0 && (joined = true);
 #endif
 	}
 
@@ -441,6 +692,7 @@ public:
 		return (::ResetEvent(m_EventHandle) == TRUE ? true : false);
 #endif
 	}
+
 };
 
 
@@ -448,15 +700,6 @@ public:
 #define EXIT_SIGNAL_HANDLER(h) signal(SIGINT, h); signal(SIGABRT, h); signal(SIGTERM, h);
 #else
 #define EXIT_SIGNAL_HANDLER(h) signal(SIGQUIT, h); signal(SIGTERM, h); signal(SIGHUP, h); signal(SIGINT, h);
-#endif
-
-#ifdef _WIN32
-#define in_port_t u_short
-#define inet_aton(s,b) InetPton(AF_INET,L##s,b)
-#define close closesocket
-#else
-#include <unistd.h>
-#define SOCKET int
 #endif
 
 
@@ -492,4 +735,27 @@ struct PlatformLocalLock {
 	inline PlatformLocalLock(PlatformMutex *mtx) :mtx(mtx) { mtx->Lock(); }
 	inline PlatformLocalLock(PlatformMutex &mtx) :mtx(&mtx) { mtx.Lock(); }
 	inline ~PlatformLocalLock() { mtx->Unlock(); }
+};
+
+
+
+class RttTimer {
+private:
+	unsigned long long wakeups_missed;
+	RttThread *thread;
+	volatile bool m_isRunning;
+	std::function<bool(void)> func;
+	void start(uint64_t startNs, uint64_t periodNs);
+	int timer_fd;
+		
+public:
+	template<typename Functor>
+	inline RttTimer(const Functor &lambda, uint64_t periodNs, uint64_t startNs = 0) :
+		func(lambda), thread(0), timer_fd(0)
+	{
+		start(startNs, periodNs);
+	}
+
+	~RttTimer();
+
 };
