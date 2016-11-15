@@ -597,7 +597,7 @@ public:
 };
 
 
-struct RttThreadEvent {
+struct RttEvent {
 private:
 #ifndef _WIN32
 	pthread_mutex_t mtx;
@@ -609,7 +609,7 @@ private:
 	bool autoreset;
 
 public:
-	RttThreadEvent(bool autoreset=true) : autoreset(autoreset), state(0)
+	RttEvent(bool autoreset=true) : autoreset(autoreset), state(0)
 	{		
 #ifndef _WIN32
 		pthread_mutex_init(&mtx, 0);
@@ -619,7 +619,7 @@ public:
 #endif
 	}
 
-	~RttThreadEvent()
+	~RttEvent()
 	{
 #ifndef _WIN32
 		pthread_cond_destroy(&cond);
@@ -719,22 +719,22 @@ public:
 #endif
 
 
-struct PlatformMutex {
+struct RttMutex {
 private:
 	MUTEX mtx;
 public:
-	inline PlatformMutex() { MUTEX_INIT(mtx); }
+	inline RttMutex() { MUTEX_INIT(mtx); }
 	inline void Lock() { MUTEX_LOCK(mtx); }
 	inline void Unlock() { MUTEX_UNLOCK(mtx); }
 	inline void Join() { MUTEX_LOCK(mtx); MUTEX_UNLOCK(mtx); }
-	inline ~PlatformMutex() { MUTEX_FREE(mtx); }
+	inline ~RttMutex() { MUTEX_FREE(mtx); }
 };
 
-struct PlatformLocalLock {
-	PlatformMutex *mtx;
-	inline PlatformLocalLock(PlatformMutex *mtx) :mtx(mtx) { mtx->Lock(); }
-	inline PlatformLocalLock(PlatformMutex &mtx) :mtx(&mtx) { mtx.Lock(); }
-	inline ~PlatformLocalLock() { mtx->Unlock(); }
+struct RttLocalLock {
+	RttMutex *mtx;
+	inline RttLocalLock(RttMutex *mtx) :mtx(mtx) { mtx->Lock(); }
+	inline RttLocalLock(RttMutex &mtx) :mtx(&mtx) { mtx.Lock(); }
+	inline ~RttLocalLock() { mtx->Unlock(); }
 };
 
 
