@@ -131,7 +131,7 @@ private:
 #endif
 
 	int joined;
-	char name[32];
+	std::string name;
 
 	
 
@@ -195,7 +195,7 @@ public:
 		Init();
 		
 		killOnDelete = true;
-		name[0] = '\0';
+		name = "";
 		joined = false;
 #ifdef _WIN32
 		handle = CreateThread (NULL, 0, func, arg, 0, &id);
@@ -300,7 +300,7 @@ public:
 		}
 
 		//pt->handle = GetCurrentThread();
-		if (strlen(pt->name) > 0)
+		if (pt->name.size() > 0)
 			pt->SetName(pt->name);
 
 		pt->func(pt->arg);
@@ -313,7 +313,7 @@ public:
 	{
 		Init();
 		proto = 0;
-		name[0] = '\0';
+		name = "";
 		killOnDelete = false;
 
 #ifdef _WIN32
@@ -337,7 +337,7 @@ public:
 			method();
 		};
 
-		name[0] = '\0';
+		name = "";
 		killOnDelete = false;
 
 #ifdef _WIN32
@@ -364,8 +364,7 @@ public:
 			f();
 		};
 
-		memset(name, 0, sizeof(name));
-		threadName.copy(name, sizeof(name));
+		name = threadName;
 		killOnDelete = false;
 
 #ifdef _WIN32
@@ -391,8 +390,7 @@ public:
 
 		if (other.proto) {
 			auto &proto(*other.proto);
-			memset(name, 0, sizeof(name));
-			proto.nextName().copy(name, sizeof(name));
+			name = proto.nextName();
 			killOnDelete = false;
 
 			auto &f = proto.getFunc();
@@ -428,17 +426,19 @@ public:
 #ifndef _WIN32
 private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(false)
 	{
-		name[0] = '\0';
+		name = "";
 		killOnDelete = false;
+		char nameBuf[64];
 #ifndef ANDROID
-		pthread_getname_np(pthread_self(), name, sizeof(name));
+		pthread_getname_np(pthread_self(), nameBuf, sizeof(nameBuf)); // TODO
+		name = nameBuf;
 #endif
 	}
 public:
 #else
 private: inline RttThread(HANDLE handle) : handle(handle), arg(0), joined(false)
 {
-	name[0] = '\0';
+	name = "";
 	killOnDelete = false;
 	id = GetThreadId(handle);
 }
@@ -484,15 +484,15 @@ public:
 #pragma pack(pop)
 #endif
 
-	inline bool SetName(const char *name)
+	inline bool SetName(const std::string &name)
 	{
-		strcpy(this->name, name);
+		this->name = name;
 #ifdef _WIN32
 		//assert(GetCurrentThread() == handle);
 				
 		THREADNAME_INFO info;
 		info.dwType = 0x1000;
-		info.szName = name;
+		info.szName = name.c_str();
 		info.dwThreadID = id;
 		info.dwFlags = 0;
 
@@ -508,7 +508,7 @@ public:
 
 		return true;
 #else
-		return pthread_setname_np(handle, this->name) == 0;
+		return pthread_setname_np(handle, this->name.c_str()) == 0;
 #endif
 
 	}
@@ -546,7 +546,7 @@ public:
 		if(maxMs > 0) {
 			timespec to;
 			if (clock_gettime(CLOCK_REALTIME, &to) == -1) {
-				fprintf(stderr, "Joining thread [%s] failed at clock_gettime()!\n", this->name);
+				fprintf(stderr, "Joining thread [%s] failed at clock_gettime()!\n", this->name.c_str());
 				return false;
 			}
 			long s = maxMs / 1000L;
@@ -561,12 +561,12 @@ public:
 		}
 
 		if (s == ETIMEDOUT) {
-			fprintf(stderr, "Joining thread [%s] timed out!\n", this->name);
+			fprintf(stderr, "Joining thread [%s] timed out!\n", this->name.c_str());
 			return false;
 		}
 
         if (s != 0) {
-			fprintf(stderr, "Joining thread [%s] failed (%d)!\n", this->name, s);
+			fprintf(stderr, "Joining thread [%s] failed (%d)!\n", this->name.c_str(), s);
 			return false;
 		}
 
