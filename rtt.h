@@ -153,13 +153,13 @@ public:
 #endif
 	}
 
-	static void Init()
+	static bool Init()
 	{
 		static bool init = false;
 		if(init) {
-			return;
+			return true;
 		}
-		init = true;
+		
     #ifndef _WIN32
         // nice value of -20 is highest!
         int r;
@@ -178,11 +178,14 @@ public:
 		if(!SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS)) {
 		  DWORD dwError = GetLastError();
 		  fprintf(stderr, "Could not set RealTime Priority (%d)\n", dwError);
-		  exit(1);
+		  return false;
 		}
 
 		
-	#endif					
+	#endif		
+
+init = true;	
+return true;
 	}
 
 
