@@ -439,7 +439,7 @@ private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(fal
 	}
 public:
 #else
-private: inline RttThread(HANDLE handle) : handle(handle), arg(0), joined(false)
+private: inline RttThread(HANDLE handle) : handle(handle), arg(0), joined(true)
 {
 	name = "";
 	killOnDelete = false;
