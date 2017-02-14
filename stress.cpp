@@ -40,6 +40,7 @@ namespace rtt {
 
 	volatile bool stress::s_stress = false;
 
+
     void stress::runAsync(int startDelayUs) {
         startFlag();
         int numHogs = RttThread::GetSystemNumCores() + 1;
@@ -99,7 +100,7 @@ namespace rtt {
             if (do_malloc) { dbg
                 (stdout, "allocating %lli bytes ...\n", bytes);
                 if (!(ptr = (char *) malloc(bytes * sizeof(char)))) {
-                    err(stderr, "hogvm malloc failed: %s\n", strerror(errno));
+                    err(stderr, "hogvm malloc failed\n");
                     return false;
                 }
                 if (singleAllocation)
@@ -138,7 +139,7 @@ namespace rtt {
             j = (j < 0) ? -j : j;
             j %= 95;
             j += 32;
-            buff[i] = j;
+            buff[i] = (char)j;
         }
         buff[i] = '\n';
 
@@ -146,7 +147,7 @@ namespace rtt {
             char name[] = "./stress.XXXXXX";
 
             if ((fd = mkstemp(name)) == -1) {
-                err(stderr, "mkstemp failed: %s\n", strerror(errno));
+                err(stderr, "mkstemp failed\n");
                 delete buff;
                 return false;
             }
@@ -167,10 +168,10 @@ namespace rtt {
             dbg
             (stdout, "fast writing to %s\n", name);
             for (j = 0; bytes == 0 || j + chunk < bytes; j += chunk) {
-                if (write(fd, buff, chunk) == -1) {
-                    err(stderr, "write failed: %s\n", strerror(errno));
+                if (_write(fd, buff, chunk) == -1) {
+                    err(stderr, "write failed\n");
                     delete buff;
-                    close(fd);
+                    _close(fd);
                     return false;
                 }
             }
@@ -178,24 +179,24 @@ namespace rtt {
             dbg
             (stdout, "slow writing to %s\n", name);
             for (; bytes == 0 || j < bytes - 1; j++) {
-                if (write(fd, &buff[j % chunk], 1) == -1) {
-                    err(stderr, "write failed: %s\n", strerror(errno));
+                if (_write(fd, &buff[j % chunk], 1) == -1) {
+                    err(stderr, "write failed\n");
                     delete buff;
-                    close(fd);
+                    _close(fd);
                     return false;
                 }
             }
-            if (write(fd, "\n", 1) == -1) {
-                err(stderr, "write failed: %s\n", strerror(errno));
+            if (_write(fd, "\n", 1) == -1) {
+                err(stderr, "write failed\n");
                 delete buff;
-                close(fd);
+                _close(fd);
                 return false;
             }
             ++j;
 
             dbg
             (stdout, "closing %s after %lli bytes\n", name, j);
-            close(fd);
+            _close(fd);
 #ifdef _WIN32
             //DeleteFileA(name);
 #endif
@@ -289,7 +290,7 @@ namespace rtt {
             v /= 62;
             XXXXXX[5] = letters[v % 62];
 
-            fd = open(tmpl, O_RDWR | O_CREAT | O_EXCL, _S_IREAD | _S_IWRITE);
+            fd = _open(tmpl, O_RDWR | O_CREAT | O_EXCL, _S_IREAD | _S_IWRITE);
             if (fd >= 0)
             {
                 errno = save_errno;
