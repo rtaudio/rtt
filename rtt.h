@@ -224,6 +224,21 @@ return true;
 		case RealTime: winprio = THREAD_PRIORITY_TIME_CRITICAL; break;
 		}
 		assert(SetThreadPriority(handle, winprio) != 0);
+		
+		if(prio == RealTime) {
+			// Attempt to assign "Pro Audio" characteristic to thread
+			// this is redundant, the characteristic can be found in registry!
+			std::cout << "TODO: need to check priority, setting it to Pro Audio characteristics!" << std::endl;
+  HMODULE AvrtDll = LoadLibrary( (LPCTSTR) "AVRT.dll" );
+  if ( AvrtDll ) {
+	  typedef HANDLE(__stdcall *TAvSetMmThreadCharacteristicsPtr)(LPCWSTR TaskName, LPDWORD TaskIndex);
+    DWORD taskIndex = 0;
+    TAvSetMmThreadCharacteristicsPtr AvSetMmThreadCharacteristicsPtr = ( TAvSetMmThreadCharacteristicsPtr ) GetProcAddress( AvrtDll, "AvSetMmThreadCharacteristicsW" );
+    AvSetMmThreadCharacteristicsPtr( L"Pro Audio", &taskIndex );
+    FreeLibrary( AvrtDll );
+  }
+
+		}
 
 
 
@@ -304,7 +319,7 @@ return true;
 
 		//pt->handle = GetCurrentThread();
 		if (pt->name.size() > 0)
-			pt->SetName(pt->name);
+            pt->SetName(pt->name);
 
 		pt->func(pt->arg);
 		return 0;
@@ -312,7 +327,7 @@ return true;
 
 	bool isRt;
 
-	inline RttThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), isRt(rtThread), joined(false)
+    inline RttThread(Routine &func, void *arg = NULL, bool rtThread = false) : func(func), arg(arg), isRt(rtThread), joined(false)
 	{
 		Init();
 		proto = 0;
@@ -331,7 +346,7 @@ return true;
 			SetPriority(RealTime);
 	}
 
-	inline RttThread(std::function<void(void)> &method, bool rtThread = false) : arg(NULL), isRt(rtThread), joined(false)
+    inline RttThread(std::function<void(void)> &method, bool rtThread = false) : arg(NULL), isRt(rtThread), joined(false)
 	{
 		Init();
 		proto = 0;
@@ -427,7 +442,7 @@ return true;
 
 
 #ifndef _WIN32
-private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(false)
+private: inline RttThread(pthread_t handle) : handle(handle), arg(0), joined(true)
 	{
 		name = "";
 		killOnDelete = false;
@@ -471,7 +486,7 @@ public:
 #ifndef _WIN32
 		return RttThread(pthread_self());
 #else
-		return RttThread(GetCurrentThread());
+        return RttThread(GetCurrentThread());
 #endif
 	}
 
@@ -601,6 +616,10 @@ public:
 
 
 struct RttEvent {
+	// we dont want to copy events
+	RttEvent(RttEvent&) = delete;
+	RttEvent& operator=(RttEvent&) = delete;
+
 private:
 #ifndef _WIN32
 	pthread_mutex_t mtx;
@@ -633,9 +652,9 @@ public:
 	}
 
 	void Signal() {
-#ifndef _WIN32
-		pthread_mutex_lock(&mtx);
 		state = 1;
+#ifndef _WIN32
+		pthread_mutex_lock(&mtx);		
 		if (autoreset)
 			pthread_cond_signal(&cond);
 		else
@@ -678,17 +697,20 @@ public:
 
 		return ret;
 #else
-	if(WaitForSingleObject(m_EventHandle, msecs == 0 ? INFINITE : msecs)==WAIT_OBJECT_0)
-		return true;
+		if (WaitForSingleObject(m_EventHandle, msecs == 0 ? INFINITE : msecs) == WAIT_OBJECT_0) {
+			state = 0;
+			return true;
+		}
+		state = 0;
 	return false;
 
 #endif
 	}
 
 	bool Reset() {
+		state = 0;
 #ifndef _WIN32
 		pthread_mutex_lock(&mtx);
-		state = 0;
 		pthread_mutex_unlock(&mtx);
 		return true;
 #else
@@ -741,24 +763,42 @@ struct RttLocalLock {
 };
 
 
-
 class RttTimer {
 private:
 	unsigned long long wakeups_missed;
 	RttThread *thread;
 	volatile bool m_isRunning;
 	std::function<bool(void)> func;
-	void start(uint64_t startNs, uint64_t periodNs);
+	void startThread(uint64_t startNs, uint64_t periodNs);
+#ifdef _WIN32
+	HANDLE timer_fd;
+#else
 	int timer_fd;
+#endif
 		
+
+	void init(uint64_t startNs, uint64_t periodNs);
 public:
 	template<typename Functor>
-	inline RttTimer(const Functor &lambda, uint64_t periodNs, uint64_t startNs = 0) :
-		func(lambda), thread(0), timer_fd(0)
+    inline RttTimer(const Functor &lambda, uint64_t periodNs, uint64_t startNs = 0) :
+		func(lambda),
+		thread(nullptr),
+		timer_fd(0)
 	{
-		start(startNs, periodNs);
+		startThread(startNs, periodNs);
+	}
+
+	inline RttTimer(std::function<bool()> *outWaitFunc, uint64_t periodNs, uint64_t startNs = 0) :
+		func(nullptr),
+		thread(nullptr),
+		timer_fd(0)
+	{
+		init(startNs, periodNs);
+		*outWaitFunc = [this]() { return waitNextPeriod(); };
 	}
 
 	~RttTimer();
 
+
+	bool waitNextPeriod();
 };

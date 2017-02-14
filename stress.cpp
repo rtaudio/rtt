@@ -21,8 +21,9 @@
 #include<Windows.h>
 #include<io.h>
 #include<wchar.h>
-#include <rtt.h>
 #include<thread>
+
+#include "rtt.h"
 
 #define sleep(s) Sleep(s*1000)
 int mkstemp(char *tmpl);

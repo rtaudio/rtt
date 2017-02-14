@@ -80,116 +80,58 @@ inline static uint64_t getMicroSeconds()
 #endif
 }
 
-void RttTimer::start(uint64_t startNs, uint64_t periodNs)
-{
+
+void RttTimer::init(uint64_t startNs, uint64_t periodNs) {
 	m_isRunning = true;
-
-
 #ifndef _WIN32
 
 	int ret;
-	
+
 	struct itimerspec itval;
 
 	/* Create the timer */
-    // MONOTONIC is more than CLOCK_REALTIME accurate!
-    timer_fd = timerfd_create(CLOCK_MONOTONIC, 0);
+	// MONOTONIC is more than CLOCK_REALTIME accurate!
+	timer_fd = timerfd_create(CLOCK_MONOTONIC, 0);
 	if (timer_fd == -1)
 		throw "Creating timerfd failed!";
-	
+
 	if (startNs < 1e3)
 		startNs = 1e3;
 
 	itval.it_interval.tv_sec = periodNs / 1000000000;
 	itval.it_interval.tv_nsec = periodNs % 1000000000;
-	itval.it_value.tv_sec = (periodNs+startNs) / 1000000000;
-	itval.it_value.tv_nsec = (periodNs+startNs) % 1000000000;
+	itval.it_value.tv_sec = (periodNs + startNs) / 1000000000;
+	itval.it_value.tv_nsec = (periodNs + startNs) % 1000000000;
 	ret = timerfd_settime(timer_fd, 0, &itval, NULL);
 
 	if (ret < 0) {
 		throw "Creating timerfd failed!";
 	}
-
-
-	thread = new RttThread([this]() {
-		unsigned long long missed;
-		int ret;
-
-		while (m_isRunning) {
-			/* Wait for the next timer event. If we have missed any the
-			number is written to "missed" */
-			//printf("reading...\n");
-			ret = read(timer_fd, &missed, sizeof(missed));
-			//printf("!\n");
-			if (ret == -1)
-			{
-				perror("read timer");
-				m_isRunning = false;
-				return;
-			}
-
-			func();
-
-			if (missed > 0)
-				this->wakeups_missed += (missed - 1);
-		}
-		
-		close(timer_fd);
-	}, true);
-
 #else
 
-
-	if(timerFreq.LowPart == 0)
+	if (timerFreq.LowPart == 0)
 		QueryPerformanceFrequency(&timerFreq);
 
-	
+
 	LARGE_INTEGER ft;
-	ft.QuadPart = -(startNs / 100);
-	HANDLE timer = CreateWaitableTimer(NULL, FALSE, NULL);
+	ft.QuadPart = -(LONGLONG)(startNs / 100UL);
+	timer_fd = CreateWaitableTimer(NULL, FALSE, NULL);
 	if (periodNs < 1000000) {
 		std::cerr << "Warning: windows timers minimum period is 1 ms, requested " << periodNs << " ns!" << std::endl;
 		periodNs = 1000000;
 	}
-	SetWaitableTimer(timer, &ft, periodNs/1000000, NULL, NULL, TRUE);
-
-
-
-	thread = new RttThread([this, startNs, periodNs, timer]() {
-		unsigned long long missed;
-		int ret;
-
-		uint64_t t = getMicroSeconds();
-
-		uint64_t tNext = t  + startNs / 1000;
-
-	
-		while (m_isRunning) {
-#ifdef USE_CUSTOM_TIMER
-			t = getMicroSeconds();
-			while (t < tNext) {
-				nsleep(100);
-				t = getMicroSeconds();
-			}
-
-			if ((t - tNext) >= 500) {
-				//std::cout << (t - tNext) << std::endl;
-			}
-
-			tNext += periodNs / 1000;
-#else
-			if (WaitForSingleObject(timer, INFINITE) != WAIT_OBJECT_0) {
-				std::cerr << "Timer cancelled!" << std::endl;
-				m_isRunning = false;
-				return;
-			}
+	SetWaitableTimer(timer_fd, &ft, (LONG)(periodNs / 1000000UL), NULL, NULL, TRUE);
 #endif
 
-			func();
-		}
-		CloseHandle(timer);
+}
+
+void RttTimer::startThread(uint64_t startNs, uint64_t periodNs)
+{
+	init(startNs, periodNs);
+	thread = new RttThread([this]() {
+		while (m_isRunning && waitNextPeriod() && func()) { }
+		m_isRunning = false;
 	}, true);
-#endif
 }
 
  RttTimer::~RttTimer() {
@@ -200,7 +142,42 @@ void RttTimer::start(uint64_t startNs, uint64_t periodNs)
 		//memset(&itval, 0, sizeof(itval));
 		//timerfd_settime(timer_fd, 0, &itval, NULL);
 
+		close(timer_fd);
 	}
+#else
+	CloseHandle(timer_fd);
 #endif
+
 	if (thread) delete thread;
 }
+
+ bool RttTimer::waitNextPeriod() {
+	 if (!m_isRunning)
+		 return false;
+
+#ifdef _WIN32
+	 if (WaitForSingleObject(timer_fd, INFINITE) != WAIT_OBJECT_0) {
+		 std::cerr << "Timer cancelled!" << std::endl;
+		 m_isRunning = false;
+		 return false;
+	 }
+#else
+	 unsigned long long missed;
+	 int ret;
+
+	 /* Wait for the next timer event. If we have missed any the
+	 number is written to "missed" */
+	 //printf("reading...\n");
+	 ret = read(timer_fd, &missed, sizeof(missed));
+	 //printf("!\n");
+	 if (ret == -1)
+	 {
+		 perror("read timer");
+		 m_isRunning = false;
+		 return false;
+	 }
+	 if (missed > 0)
+		 this->wakeups_missed += (missed - 1);	 
+#endif
+	 return true;
+ }
